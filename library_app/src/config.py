@@ -1,7 +1,15 @@
-from pydantic import BaseSettings, AnyHttpUrl
+from pydantic_settings import BaseSettings
+from pydantic import AnyHttpUrl
+
 from typing import List, Optional, Union
 import secrets
 
+from pydantic import PydanticUserError, create_model
+
+try:
+    create_model('FooModel', foo=(str, 'default value', 'more'))
+except PydanticUserError as exc_info:
+    assert exc_info.code == 'create-model-field-definitions'
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "Library Management System"
