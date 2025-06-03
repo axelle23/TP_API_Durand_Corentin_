@@ -1,204 +1,49 @@
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
 
 from src.models.base import Base
 from src.db.session import get_db
 from src.main import app
 
 
-@pytest.fixture(scope="session")
-def engine():
-    """
-    Crée un moteur SQLAlchemy pour les tests.
-    """
-    engine = create_engine(
-        "sqlite:///:memory:",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(engine)
-    return engine
+# Créer une base de données SQLite en mémoire pour les tests
+SQLALCHEMY_DATABASE_URL = "sqlite:///./test.db"
+engine = create_engine(
+    SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False}
+)
+TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
 @pytest.fixture(scope="function")
-def db_session(engine):
-    """
-    Crée une nouvelle session de base de données pour un test.
-    """
-    connection = engine.connect()
-    transaction = connection.begin()
-    session = sessionmaker(bind=connection)()
+def db_session():
+    # Créer les tables dans la base de données de test
+    Base.metadata.create_all(bind=engine)
 
-    yield session
+    # Créer une session de base de données pour les tests
+    db = TestingSessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
-    session.close()
-    transaction.rollback()
-    connection.close()
+    # Supprimer les tables après les tests
+    Base.metadata.drop_all(bind=engine)
 
 
+# Remplacer la dépendance get_db par get_test_db pour les tests
 @pytest.fixture(scope="function")
 def client(db_session):
-    """
-    Crée un client de test pour FastAPI.
-    """
-    def override_get_db():
+    def get_test_db():
         try:
             yield db_session
         finally:
             pass
 
-    app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_db] = get_test_db
 
     from fastapi.testclient import TestClient
     with TestClient(app) as client:
         yield client
 
     app.dependency_overrides = {}
-
-    Créez le fichier tests/services/test_users.py pour tester le service utilisateur :
-
-import pytest
-from sqlalchemy.orm import Session
-
-from src.models.users import User
-from src.repositories.users import UserRepository
-from src.services.users import UserService
-from src.api.schemas.users import UserCreate, UserUpdate
-
-
-def test_create_user(db_session: Session):
-    """
-    Teste la création d'un utilisateur.
-    """
-    repository = UserRepository(User, db_session)
-    service = UserService(repository)
-
-    user_in = UserCreate(
-        email="test@example.com",
-        password="password123",
-        full_name="Test User",
-        is_active=True,
-        is_admin=False
-    )
-
-    user = service.create(obj_in=user_in)
-
-    assert user.email == "test@example.com"
-    assert user.full_name == "Test User"
-    assert user.is_active is True
-    assert user.is_admin is False
-    assert hasattr(user, "hashed_password")
-    assert user.hashed_password != "password123"
-
-
-def test_authenticate_user(db_session: Session):
-    """
-    Teste l'authentification d'un utilisateur.
-    """
-    repository = UserRepository(User, db_session)
-    service = UserService(repository)
-
-    user_in = UserCreate(
-        email="auth@example.com",
-        password="password123",
-        full_name="Auth User"
-    )
-
-    user = service.create(obj_in=user_in)
-
-    # Authentification réussie
-    authenticated_user = service.authenticate(email="auth@example.com", password="password123")
-    assert authenticated_user is not None
-    assert authenticated_user.id == user.id
-
-    # Authentification échouée - mauvais mot de passe
-    authenticated_user = service.authenticate(email="auth@example.com", password="wrongpassword")
-    assert authenticated_user is None
-
-    # Authentification échouée - email inexistant
-    authenticated_user = service.authenticate(email="nonexistent@example.com", password="password123")
-    assert authenticated_user is None
-
-
-def test_update_user(db_session: Session):
-    """
-    Teste la mise à jour d'un utilisateur.
-    """
-    repository = UserRepository(User, db_session)
-    service = UserService(repository)
-
-    user_in = UserCreate(
-        email="update@example.com",
-        password="password123",
-        full_name="Update User"
-    )
-
-    user = service.create(obj_in=user_in)
-
-    # Mise à jour sans mot de passe
-    user_update = UserUpdate(full_name="Updated Name")
-    updated_user = service.update(db_obj=user, obj_in=user_update)
-
-    assert updated_user.id == user.id
-    assert updated_user.email == user.email
-    assert updated_user.full_name == "Updated Name"
-    assert updated_user.hashed_password == user.hashed_password
-
-    # Mise à jour avec mot de passe
-    user_update = UserUpdate(password="newpassword123")
-    updated_user = service.update(db_obj=updated_user, obj_in=user_update)
-
-    assert updated_user.id == user.id
-    assert updated_user.hashed_password != user.hashed_password
-
-    # Vérifier que le nouveau mot de passe fonctionne
-    authenticated_user = service.authenticate(email="update@example.com", password="newpassword123")
-    assert authenticated_user is not None
-    assert authenticated_user.id == user.id
-
-
-def test_get_by_email(db_session: Session):
-    """
-    Teste la récupération d'un utilisateur par email.
-    """
-    repository = UserRepository(User, db_session)
-    service = UserService(repository)
-
-    user_in = UserCreate(
-        email="get@example.com",
-        password="password123",
-        full_name="Get User"
-    )
-
-    user = service.create(obj_in=user_in)
-
-    # Récupération réussie
-    retrieved_user = service.get_by_email(email="get@example.com")
-    assert retrieved_user is not None
-    assert retrieved_user.id == user.id
-
-    # Récupération échouée - email inexistant
-    retrieved_user = service.get_by_email(email="nonexistent@example.com")
-    assert retrieved_user is None
-
-
-def test_create_user_email_already_used(db_session: Session):
-    """
-    Teste la création d'un utilisateur avec un email déjà utilisé.
-    """
-    repository = UserRepository(User, db_session)
-    service = UserService(repository)
-
-    user_in = UserCreate(
-        email="duplicate@example.com",
-        password="password123",
-        full_name="Duplicate User"
-    )
-
-    service.create(obj_in=user_in)
-
-    # Tentative de création avec le même email
-    with pytest.raises(ValueError):
-        service.create(obj_in=user_in)
